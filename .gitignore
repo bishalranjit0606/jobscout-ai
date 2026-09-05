@@ -17,6 +17,9 @@ ENV/
 .env.*
 !.env.example
 
+# Temporary copy of git seen_jobs.json during GitHub Actions
+seen_jobs.repo.json
+
 # IDE
 .vscode/
 .idea/

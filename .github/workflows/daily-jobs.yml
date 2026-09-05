@@ -5,6 +5,13 @@ on:
     - cron: "0 6 * * *"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-job-scout
+  cancel-in-progress: false
+
 jobs:
   scout:
     name: Fetch and email new jobs
@@ -14,6 +21,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Keep a copy of the repo seen list
+        run: cp seen_jobs.json seen_jobs.repo.json
 
       - name: Restore seen jobs cache
         uses: actions/cache@v4
@@ -39,3 +49,15 @@ jobs:
           GMAIL_SENDER_EMAIL: ${{ secrets.GMAIL_SENDER_EMAIL }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python -u main.py
+
+      - name: Save seen jobs to the repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add seen_jobs.json
+          if git diff --cached --quiet; then
+            echo "seen_jobs.json has no changes."
+          else
+            git commit -m "Record emailed jobs in seen_jobs.json"
+            git push
+          fi

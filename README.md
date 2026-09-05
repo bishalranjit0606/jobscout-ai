@@ -12,7 +12,7 @@ Emails go to `bishalranjit2002@gmail.com` and `bishalranjitofficial@gmail.com`.
 2. Fetches scraped LinkedIn jobs from RecruitNepal (`limit=500`) and English job posts from Arbeitnow EU + UK (no API key).
 3. Drops Arbeitnow listings written in German or that require German.
 4. Keeps strict title matches only (primary AI roles, or secondary backend/Python roles with an AI/API signal).
-5. Emails only **new** matches. Already-sent jobs stay in `seen_jobs.json`.
+5. Emails only **new** matches. A job is skipped if it is already in the GitHub file **or** the Actions cache.
 
 ## Directory structure
 
@@ -23,7 +23,7 @@ Emails go to `bishalranjit2002@gmail.com` and `bishalranjitofficial@gmail.com`.
 ├── README.md
 ├── main.py                           # Fetch + match + email agent
 ├── requirements.txt
-└── seen_jobs.json                    # Dedup store (empty array at start)
+└── seen_jobs.json                    # Emailed job IDs (repo + cache)
 ```
 
 ## Local setup
@@ -72,12 +72,12 @@ The workflow `.github/workflows/daily-jobs.yml` runs:
 - every day at `0 6 * * *` (06:00 UTC)
 - on demand via **Actions → Daily LinkedIn Job Scout → Run workflow**
 
-`seen_jobs.json` is persisted between runs with `actions/cache@v4`:
+Already-sent jobs are stored in **both** places:
 
-- save key: `job-cache-${{ github.run_id }}`
-- restore prefix: `job-cache-`
+- `seen_jobs.json` in the repo (committed after each run, so you can open it on GitHub)
+- GitHub Actions cache (`job-cache-…`)
 
-The repo copy of `seen_jobs.json` stays `[]`. The cache is the live memory of already-sent job IDs.
+Before sending, the scout merges both lists. If either place already has the job, it is not emailed. If cache is missing later, the GitHub file still blocks duplicates.
 
 ## Configure GitHub Repository Secrets
 

@@ -22,6 +22,7 @@ from typing import Any
 import requests
 
 SEEN_JOBS_PATH = Path(__file__).resolve().parent / "seen_jobs.json"
+SEEN_JOBS_REPO_SNAPSHOT = Path(__file__).resolve().parent / "seen_jobs.repo.json"
 API_URL = "https://api.recruitnepal.com/api/v1/automation/linkedin-scraped?limit=500"
 ARBEITNOW_SOURCES = (
     ("Arbeitnow EU", "https://www.arbeitnow.com/api/job-board-api"),
@@ -257,19 +258,30 @@ def require_env() -> None:
         )
 
 
-def load_seen_jobs(path: Path = SEEN_JOBS_PATH) -> list[str]:
+def unique_job_ids(identities: list[str]) -> list[str]:
+    unique: list[str] = []
+    found: set[str] = set()
+    for identity in identities:
+        key = identity.strip()
+        if not key or key in found:
+            continue
+        found.add(key)
+        unique.append(key)
+    return unique
+
+
+def load_seen_ids_from_file(path: Path) -> list[str]:
     if not path.exists():
-        logger.info("No seen-jobs file found. Initializing empty list.")
         return []
 
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        logger.warning("Could not parse %s (%s). Starting from an empty list.", path, exc)
+        logger.warning("Could not parse %s (%s). Skipping this file.", path, exc)
         return []
 
     if not isinstance(data, list):
-        logger.warning("%s is not a JSON array. Starting from an empty list.", path)
+        logger.warning("%s is not a JSON array. Skipping this file.", path)
         return []
 
     seen: list[str] = []
@@ -279,15 +291,21 @@ def load_seen_jobs(path: Path = SEEN_JOBS_PATH) -> list[str]:
     return seen
 
 
+def load_seen_jobs() -> list[str]:
+    from_file = load_seen_ids_from_file(SEEN_JOBS_PATH)
+    from_snapshot = load_seen_ids_from_file(SEEN_JOBS_REPO_SNAPSHOT)
+    merged = unique_job_ids(from_file + from_snapshot)
+    logger.info(
+        "Loaded %d seen job(s) from file (%d) and repo snapshot (%d).",
+        len(merged),
+        len(from_file),
+        len(from_snapshot),
+    )
+    return merged
+
+
 def save_seen_jobs(identities: list[str], path: Path = SEEN_JOBS_PATH) -> None:
-    unique: list[str] = []
-    found: set[str] = set()
-    for identity in identities:
-        key = identity.strip()
-        if not key or key in found:
-            continue
-        found.add(key)
-        unique.append(key)
+    unique = unique_job_ids(identities)
     path.write_text(json.dumps(unique, indent=2) + "\n", encoding="utf-8")
     logger.info("Saved %d seen job(s) to %s.", len(unique), path)
 
@@ -689,7 +707,7 @@ def main() -> int:
     require_env()
 
     seen = load_seen_jobs()
-    logger.info("Loaded %d previously emailed job(s).", len(seen))
+    save_seen_jobs(seen)
 
     try:
         rows = fetch_all_jobs()
@@ -710,7 +728,7 @@ def main() -> int:
     try:
         send_html_email(build_html_email(new_jobs), len(new_jobs))
     except Exception:
-        logger.exception("Failed to send email. Seen-jobs file was not updated.")
+        logger.exception("Failed to send email. Seen-jobs file was not updated with new jobs.")
         return 1
 
     save_seen_jobs(
