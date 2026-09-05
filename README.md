@@ -1,6 +1,6 @@
 # JobScout
 
-Daily Python agent for LinkedIn jobs from RecruitNepal. It keeps only AI, LLM, agent, RAG, and automation roles that match Bishal's target titles, skips jobs already emailed, and sends one HTML Gmail briefing when something new appears.
+Daily Python agent for LinkedIn jobs from RecruitNepal and English roles from Arbeitnow (EU + UK). It keeps only AI, LLM, agent, RAG, and automation roles that match Bishal's target titles, skips jobs already emailed, and sends one HTML Gmail briefing when something new appears.
 
 Most days send nothing. Generic software / IT / cloud jobs are ignored.
 
@@ -9,9 +9,10 @@ Emails go to `bishalranjit2002@gmail.com` and `bishalranjitofficial@gmail.com`.
 ## What it does
 
 1. Runs every day at 06:00 UTC. Most days send **no email**.
-2. Fetches scraped LinkedIn jobs from RecruitNepal (`limit=500`).
-3. Keeps strict title matches only (primary AI roles, or secondary backend/Python roles with an AI/API signal).
-4. Emails only **new** matches. Already-sent jobs stay in `seen_jobs.json`.
+2. Fetches scraped LinkedIn jobs from RecruitNepal (`limit=500`) and English job posts from Arbeitnow EU + UK (no API key).
+3. Drops Arbeitnow listings written in German or that require German.
+4. Keeps strict title matches only (primary AI roles, or secondary backend/Python roles with an AI/API signal).
+5. Emails only **new** matches. Already-sent jobs stay in `seen_jobs.json`.
 
 ## Directory structure
 
