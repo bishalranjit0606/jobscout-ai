@@ -1,4 +1,4 @@
-name: Daily LinkedIn Job Scout
+name: Daily Job and Training Scout
 
 on:
   schedule:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   scout:
-    name: Fetch and email new jobs
+    name: Fetch and email new jobs and trainings
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -42,7 +42,7 @@ jobs:
       - name: Install dependencies
         run: pip install --upgrade pip && pip install -r requirements.txt
 
-      - name: Run job scout
+      - name: Run job and training scout
         env:
           RECRUITNEPAL_API_USER: ${{ secrets.RECRUITNEPAL_API_USER }}
           RECRUITNEPAL_API_PASSWORD: ${{ secrets.RECRUITNEPAL_API_PASSWORD }}
@@ -50,7 +50,7 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python -u main.py
 
-      - name: Save seen jobs to the repo
+      - name: Save seen items to the repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -58,6 +58,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "seen_jobs.json has no changes."
           else
-            git commit -m "Record emailed jobs in seen_jobs.json"
+            git commit -m "Record emailed jobs and trainings in seen_jobs.json"
             git push
           fi

@@ -1,8 +1,8 @@
 # JobScout
 
-Daily Python agent for LinkedIn jobs from RecruitNepal. It keeps only AI, LLM, agent, RAG, and automation roles that match Bishal's target titles, skips jobs already emailed, and sends one HTML Gmail briefing when something new appears.
+Daily Python agent for LinkedIn jobs from RecruitNepal and free government trainings from Shram Sansar. It keeps only AI, LLM, agent, RAG, and automation roles that match Bishal's target titles, keeps only **free** Shram Sansar trainings, skips anything already emailed, and sends **one** HTML Gmail briefing when something new appears.
 
-Most days send nothing. Generic software / IT / cloud jobs are ignored.
+Most days send nothing. Generic software / IT / cloud jobs and paid trainings are ignored. Jobs and trainings never trigger two emails; they share one briefing.
 
 Emails go to `bishalranjit2002@gmail.com` and `bishalranjitofficial@gmail.com`.
 
@@ -10,8 +10,9 @@ Emails go to `bishalranjit2002@gmail.com` and `bishalranjitofficial@gmail.com`.
 
 1. Runs every day at 06:00 UTC. Most days send **no email**.
 2. Fetches scraped LinkedIn jobs from RecruitNepal (`limit=500`).
-3. Keeps strict title matches only (primary AI roles, or secondary backend/Python roles with an AI/API signal).
-4. Emails only **new** matches. A job is skipped if it is already in the GitHub file **or** the Actions cache.
+3. Fetches trainings from Shram Sansar and keeps only free, not-expired ones.
+4. Keeps strict job title matches only (primary AI roles, or secondary backend/Python roles with an AI/API signal).
+5. Emails only **new** matches in a single email. A job or training is skipped if it is already in the GitHub file **or** the Actions cache.
 
 ## Directory structure
 
@@ -61,17 +62,17 @@ python main.py
 
 Expected logs:
 
-- `No new matching jobs...` if nothing new matched.
-- `HTML email sent...` if at least one new match was found.
+- `No new matching jobs or free trainings...` if nothing new matched.
+- `HTML email sent...` if at least one new job or free training was found.
 
 ## GitHub Actions (daily at 06:00 UTC)
 
 The workflow `.github/workflows/daily-jobs.yml` runs:
 
 - every day at `0 6 * * *` (06:00 UTC)
-- on demand via **Actions → Daily LinkedIn Job Scout → Run workflow**
+- on demand via **Actions → Daily Job and Training Scout → Run workflow**
 
-Already-sent jobs are stored in **both** places:
+Already-sent jobs and trainings are stored in **both** places:
 
 - `seen_jobs.json` in the repo (committed after each run, so you can open it on GitHub)
 - GitHub Actions cache (`job-cache-…`)
@@ -113,7 +114,7 @@ Gmail SMTP (`smtp.gmail.com:465`, SSL) needs an App Password, not your normal lo
    - `RECRUITNEPAL_API_PASSWORD`
    - `GMAIL_SENDER_EMAIL`
    - `GMAIL_APP_PASSWORD`
-5. Run **Actions → Daily LinkedIn Job Scout → Run workflow** once to confirm:
+5. Run **Actions → Daily Job and Training Scout → Run workflow** once to confirm:
    - Python 3.11 installs
    - cache restore/save works
    - the job either emails new matches or logs that none were found

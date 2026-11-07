@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily job scout: fetch RecruitNepal jobs, match, dedupe, email."""
+"""Daily scout: RecruitNepal jobs + free Shram Sansar trainings, dedupe, one email."""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ import requests
 SEEN_JOBS_PATH = Path(__file__).resolve().parent / "seen_jobs.json"
 SEEN_JOBS_REPO_SNAPSHOT = Path(__file__).resolve().parent / "seen_jobs.repo.json"
 API_URL = "https://api.recruitnepal.com/api/v1/automation/linkedin-scraped?limit=500"
+TRAININGS_API_URL = "https://api.shramsansar.gov.np/public/trainings-list?size=100"
+TRAINING_DETAIL_URL = "https://shramsansar.gov.np/training/training-detail/{id}"
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 465
 RECIPIENTS = [
@@ -35,6 +37,17 @@ REQUIRED_ENV_VARS = (
     "GMAIL_SENDER_EMAIL",
     "GMAIL_APP_PASSWORD",
 )
+TRAINING_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en",
+    "Origin": "https://shramsansar.gov.np",
+    "Referer": "https://shramsansar.gov.np/",
+    "User-Agent": (
+        "Mozilla/5.0 (Linux; Android 16; Pixel 10) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36"
+    ),
+    "vendor": "browser",
+}
 JOB_FIELDS = (
     "scraped_date",
     "job_title",
@@ -187,6 +200,28 @@ class MatchedJob:
         company = re.sub(r"\s+", " ", self.company_name).strip().lower()
         title = re.sub(r"\s+", " ", self.job_title).strip().lower()
         return f"{company}::{title}"
+
+
+@dataclass
+class FreeTraining:
+    training_id: int
+    title: str
+    company_name: str
+    location: str
+    start_date: str
+    end_date: str
+    start_time: str
+    end_time: str
+    before_days: str
+    detail_url: str
+
+    def identity(self) -> str:
+        return f"training::{self.training_id}"
+
+    def fingerprint(self) -> str:
+        company = re.sub(r"\s+", " ", self.company_name).strip().lower()
+        title = re.sub(r"\s+", " ", self.title).strip().lower()
+        return f"training::{company}::{title}"
 
 
 def compile_phrase(phrase: str) -> re.Pattern[str]:
@@ -405,6 +440,98 @@ def filter_new_jobs(jobs: list[MatchedJob], seen: list[str]) -> list[MatchedJob]
     return fresh
 
 
+def fetch_shramsansar_trainings() -> list[dict[str, Any]]:
+    logger.info("Fetching trainings from Shram Sansar...")
+    try:
+        response = requests.get(
+            TRAININGS_API_URL,
+            headers=TRAINING_HEADERS,
+            timeout=60,
+        )
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        raise RuntimeError(f"Shram Sansar API request failed (HTTP {status}).") from exc
+    except requests.RequestException as exc:
+        raise RuntimeError("Shram Sansar API request failed.") from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Shram Sansar API did not return JSON.") from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("Shram Sansar API JSON must be an object.")
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("Shram Sansar API JSON is missing a 'data' object.")
+
+    rows = data.get("content")
+    if not isinstance(rows, list):
+        raise RuntimeError("Shram Sansar API JSON is missing a 'content' array.")
+
+    logger.info("Fetched %d Shram Sansar training row(s).", len(rows))
+    return rows
+
+
+def parse_free_training(row: dict[str, Any]) -> FreeTraining | None:
+    if not isinstance(row, dict):
+        return None
+    if row.get("free") is not True:
+        return None
+    if row.get("expired") is True:
+        return None
+
+    training_id = row.get("trainingIds")
+    title = str(row.get("title") or "").strip()
+    if not isinstance(training_id, int) or not title:
+        return None
+
+    return FreeTraining(
+        training_id=training_id,
+        title=title,
+        company_name=str(row.get("companyName") or "").strip(),
+        location=str(row.get("location") or "").strip(),
+        start_date=str(row.get("startDate") or "").strip(),
+        end_date=str(row.get("endDate") or "").strip(),
+        start_time=str(row.get("startTime") or "").strip(),
+        end_time=str(row.get("endTime") or "").strip(),
+        before_days=str(row.get("beforeDays") or "").strip(),
+        detail_url=TRAINING_DETAIL_URL.format(id=training_id),
+    )
+
+
+def match_free_trainings(rows: list[dict[str, Any]]) -> list[FreeTraining]:
+    matched: list[FreeTraining] = []
+    for row in rows:
+        training = parse_free_training(row)
+        if training is not None:
+            matched.append(training)
+    logger.info("Kept %d free government training(s).", len(matched))
+    return matched
+
+
+def filter_new_trainings(
+    trainings: list[FreeTraining], seen: list[str]
+) -> list[FreeTraining]:
+    seen_set = set(seen)
+    seen_in_batch: set[str] = set()
+    fresh: list[FreeTraining] = []
+    for training in trainings:
+        keys = [key for key in (training.identity(), training.fingerprint()) if key]
+        if not keys or any(key in seen_set or key in seen_in_batch for key in keys):
+            continue
+        seen_in_batch.update(keys)
+        fresh.append(training)
+    logger.info(
+        "%d new free training(s) to email; %d already seen or duplicate.",
+        len(fresh),
+        len(trainings) - len(fresh),
+    )
+    return fresh
+
+
 def href_for(value: str, *, mailto: bool = False) -> str:
     text = value.strip()
     if not text:
@@ -484,11 +611,115 @@ def job_card(job: MatchedJob) -> str:
     """
 
 
-def build_html_email(jobs: list[MatchedJob]) -> str:
-    count = len(jobs)
-    noun = "job" if count == 1 else "jobs"
-    cards = "".join(job_card(job) for job in jobs)
+def training_card(training: FreeTraining) -> str:
+    schedule_parts: list[str] = []
+    if training.start_date or training.end_date:
+        schedule_parts.append(f"{training.start_date} to {training.end_date}".strip())
+    if training.start_time or training.end_time:
+        schedule_parts.append(
+            f"{training.start_time} - {training.end_time}".strip(" -")
+        )
+    if training.before_days:
+        schedule_parts.append(training.before_days)
+    schedule = " · ".join(schedule_parts)
+    rows = [
+        ("Provider", html.escape(training.company_name or "-")),
+        ("Cost", "Free"),
+        ("Source", "Shram Sansar (government)"),
+        ("Location", html.escape(training.location or "-")),
+        ("Schedule", html.escape(schedule or "-")),
+        ("Details", render_link(training.detail_url, "Open training")),
+    ]
+    detail_rows = "".join(
+        (
+            "<tr>"
+            f'<td style="padding:7px 0;color:#6b8aa0;width:112px;vertical-align:top;">'
+            f"{label}</td>"
+            f'<td style="padding:7px 0;color:#1a3344;">{value}</td>'
+            "</tr>"
+        )
+        for label, value in rows
+    )
+    return f"""
+    <div style="background:#ffffff;border:1px solid #cfe6f5;border-left:4px solid #2f8f6b;
+                border-radius:10px;padding:18px 18px 12px;margin:0 0 14px;">
+      <div style="font-size:11px;letter-spacing:0.08em;text-transform:uppercase;
+                  color:#2f8f6b;font-weight:700;margin-bottom:6px;">
+        FREE TRAINING
+      </div>
+      <div style="font-family:Palatino,'Palatino Linotype',Georgia,serif;font-size:20px;
+                  line-height:1.35;color:#1a3344;margin:0 0 10px;">
+        {html.escape(training.title)}
+      </div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+             style="font-size:14px;line-height:1.5;">{detail_rows}</table>
+    </div>
+    """
+
+
+def briefing_headline(job_count: int, training_count: int) -> str:
+    parts: list[str] = []
+    if job_count:
+        parts.append(f"{job_count} new matching {'job' if job_count == 1 else 'jobs'}")
+    if training_count:
+        parts.append(
+            f"{training_count} new free {'training' if training_count == 1 else 'trainings'}"
+        )
+    return " · ".join(parts) if parts else "No new matches"
+
+
+def email_subject(job_count: int, training_count: int) -> str:
     today = date.today().isoformat()
+    if job_count and training_count:
+        return (
+            f"JobScout: {job_count} job(s) + {training_count} free training(s) ({today})"
+        )
+    if training_count:
+        noun = "training" if training_count == 1 else "trainings"
+        return f"JobScout: {training_count} free {noun} ({today})"
+    noun = "job" if job_count == 1 else "jobs"
+    return f"JobScout: {job_count} matching {noun} ({today})"
+
+
+def build_html_email(
+    jobs: list[MatchedJob], trainings: list[FreeTraining] | None = None
+) -> str:
+    trainings = trainings or []
+    today = date.today().isoformat()
+    headline = briefing_headline(len(jobs), len(trainings))
+    sources: list[str] = []
+    if jobs:
+        sources.append("RecruitNepal LinkedIn roles")
+    if trainings:
+        sources.append("Shram Sansar free trainings")
+    source_line = " · ".join(sources + [today])
+
+    sections: list[str] = []
+    if jobs:
+        job_cards = "".join(job_card(job) for job in jobs)
+        sections.append(
+            f"""
+    <h2 style="font-family:Palatino,'Palatino Linotype',Georgia,serif;font-size:18px;
+               font-weight:normal;margin:0 0 12px;color:#1a3344;">Jobs</h2>
+    {job_cards}
+            """
+        )
+    if trainings:
+        training_cards = "".join(training_card(item) for item in trainings)
+        if jobs:
+            sections.append(
+                '<div style="height:1px;background:#b9d7ea;margin:8px 0 18px;"></div>'
+            )
+        sections.append(
+            f"""
+    <h2 style="font-family:Palatino,'Palatino Linotype',Georgia,serif;font-size:18px;
+               font-weight:normal;margin:0 0 12px;color:#1a3344;">
+      Free government trainings
+    </h2>
+    {training_cards}
+            """
+        )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -503,15 +734,16 @@ def build_html_email(jobs: list[MatchedJob]) -> str:
               text-transform:uppercase;color:#2b7bb9;">JobScout</p>
     <h1 style="font-family:Palatino,'Palatino Linotype',Georgia,serif;font-size:28px;
                font-weight:normal;line-height:1.25;margin:0 0 8px;color:#1a3344;">
-      {count} new matching {noun}
+      {html.escape(headline)}
     </h1>
     <p style="margin:0 0 16px;color:#5e7d93;font-size:15px;">
-      RecruitNepal LinkedIn roles · {html.escape(today)}
+      {html.escape(source_line)}
     </p>
     <div style="height:1px;background:#b9d7ea;margin:0 0 18px;"></div>
-    {cards}
+    {"".join(sections)}
     <p style="margin:18px 0 0;font-size:12px;color:#8aa4b8;">
-      Only new matches are emailed. Generic software / IT / cloud jobs are ignored.
+      Only new matches are emailed once. Paid trainings and generic software / IT /
+      cloud jobs are ignored.
     </p>
   </div>
 </body>
@@ -519,11 +751,12 @@ def build_html_email(jobs: list[MatchedJob]) -> str:
 """
 
 
-def send_html_email(html_body: str, job_count: int) -> None:
+def send_html_email(
+    html_body: str, job_count: int, training_count: int = 0
+) -> None:
     sender = os.environ["GMAIL_SENDER_EMAIL"].strip()
     app_password = os.environ["GMAIL_APP_PASSWORD"].replace(" ", "")
-    noun = "job" if job_count == 1 else "jobs"
-    subject = f"JobScout: {job_count} matching {noun} ({date.today().isoformat()})"
+    subject = email_subject(job_count, training_count)
 
     message = MIMEMultipart("alternative")
     message["From"] = sender
@@ -547,34 +780,66 @@ def main() -> int:
     seen = load_seen_jobs()
     save_seen_jobs(seen)
 
+    job_error: Exception | None = None
+    training_error: Exception | None = None
+    new_jobs: list[MatchedJob] = []
+    new_trainings: list[FreeTraining] = []
+
     try:
         rows = fetch_all_jobs()
-    except Exception:
-        logger.exception("Failed to fetch jobs.")
-        return 1
-
-    matched = match_jobs(rows)
-    new_jobs = filter_new_jobs(matched, seen)
-
-    if not new_jobs:
-        logger.info("No new matching jobs. Exiting without sending email.")
-        return 0
-
-    titles = [job.job_title for job in new_jobs]
-    logger.info("New matching job(s): %s", "; ".join(titles))
+        matched = match_jobs(rows)
+        new_jobs = filter_new_jobs(matched, seen)
+    except Exception as exc:
+        job_error = exc
+        logger.exception("Failed to fetch or match jobs.")
 
     try:
-        send_html_email(build_html_email(new_jobs), len(new_jobs))
+        training_rows = fetch_shramsansar_trainings()
+        free_trainings = match_free_trainings(training_rows)
+        new_trainings = filter_new_trainings(free_trainings, seen)
+    except Exception as exc:
+        training_error = exc
+        logger.exception("Failed to fetch or match trainings.")
+
+    if job_error is not None and training_error is not None:
+        logger.error("Both job and training sources failed.")
+        return 1
+
+    if not new_jobs and not new_trainings:
+        logger.info("No new matching jobs or free trainings. Exiting without email.")
+        return 0
+
+    if new_jobs:
+        logger.info(
+            "New matching job(s): %s",
+            "; ".join(job.job_title for job in new_jobs),
+        )
+    if new_trainings:
+        logger.info(
+            "New free training(s): %s",
+            "; ".join(item.title for item in new_trainings),
+        )
+
+    try:
+        send_html_email(
+            build_html_email(new_jobs, new_trainings),
+            len(new_jobs),
+            len(new_trainings),
+        )
     except Exception:
-        logger.exception("Failed to send email. Seen-jobs file was not updated with new jobs.")
+        logger.exception(
+            "Failed to send email. Seen-jobs file was not updated with new items."
+        )
         return 1
 
     save_seen_jobs(
         seen
         + [job.identity() for job in new_jobs]
         + [job.fingerprint() for job in new_jobs]
+        + [item.identity() for item in new_trainings]
+        + [item.fingerprint() for item in new_trainings]
     )
-    logger.info("Daily job-scout run completed successfully.")
+    logger.info("Daily scout run completed successfully.")
     return 0
 
 
