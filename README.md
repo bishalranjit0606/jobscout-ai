@@ -4,7 +4,7 @@ Daily Python agent for LinkedIn jobs from RecruitNepal and free government train
 
 Most days send nothing. Generic software / IT / cloud jobs and paid trainings are ignored. Jobs and trainings never trigger two emails; they share one briefing.
 
-Emails go to `bishalranjit2002@gmail.com` and `bishalranjitofficial@gmail.com`.
+AI jobs and free trainings go to `bishalranjit2002@gmail.com` and `bishalranjitofficial@gmail.com`. Developer jobs go to `siddhanta.work@gmail.com` and `lamap8708@gmail.com`. QA jobs go to `db3002448@gmail.com`.
 
 ## What it does
 

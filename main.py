@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily scout: RecruitNepal jobs + free Shram Sansar trainings, dedupe, one email."""
+"""Daily scout: RecruitNepal jobs + free Shram Sansar trainings, dedupe, email by lane."""
 
 from __future__ import annotations
 
@@ -30,6 +30,13 @@ SMTP_PORT = 465
 RECIPIENTS = [
     "bishalranjit2002@gmail.com",
     "bishalranjitofficial@gmail.com",
+]
+DEVELOPER_RECIPIENTS = [
+    "siddhanta.work@gmail.com",
+    "lamap8708@gmail.com",
+]
+QA_RECIPIENTS = [
+    "db3002448@gmail.com",
 ]
 REQUIRED_ENV_VARS = (
     "RECRUITNEPAL_API_USER",
@@ -96,6 +103,40 @@ SECONDARY_ROLES = (
     "nodejs developer",
     "node.js developer",
 )
+QA_ROLES = (
+    "quality assurance",
+    "qa engineer",
+    "qa tester",
+    "qa analyst",
+    "quality engineer",
+    "software tester",
+    "manual tester",
+    "automation tester",
+    "test engineer",
+    "test automation",
+    "qa automation",
+    "tester",
+    "sdet",
+    "qa",
+)
+DEVELOPER_ROLES = (
+    "full stack developer",
+    "fullstack developer",
+    "full-stack developer",
+    "mern stack developer",
+    "mern developer",
+    "next.js developer",
+    "nextjs developer",
+    "next js developer",
+    "react.js developer",
+    "react developer",
+    "node.js developer",
+    "nodejs developer",
+    "front-end developer",
+    "front end developer",
+    "frontend developer",
+    "developer",
+)
 AI_CONTEXT = (
     "ai",
     "artificial intelligence",
@@ -114,14 +155,7 @@ AI_CONTEXT = (
     "integration",
 )
 EXCLUDED = (
-    "qa",
-    "quality assurance",
-    "tester",
     "testing",
-    "test engineer",
-    "test automation",
-    "automation tester",
-    "qa automation",
     "network",
     "system administrator",
     "systems administrator",
@@ -189,6 +223,7 @@ class MatchedJob:
     match_type: str
     match_score: int
     matched_keywords: list[str]
+    lane: str
 
     def identity(self) -> str:
         url = self.job_url.strip()
@@ -233,6 +268,8 @@ def compile_phrase(phrase: str) -> re.Pattern[str]:
 PRIMARY_PATTERNS = [(role, compile_phrase(role)) for role in PRIMARY_ROLES]
 SECONDARY_PATTERNS = [(role, compile_phrase(role)) for role in SECONDARY_ROLES]
 AI_CONTEXT_PATTERNS = [(word, compile_phrase(word)) for word in AI_CONTEXT]
+QA_PATTERNS = [(role, compile_phrase(role)) for role in QA_ROLES]
+DEVELOPER_PATTERNS = [(role, compile_phrase(role)) for role in DEVELOPER_ROLES]
 EXCLUDED_PATTERNS = [(word, compile_phrase(word)) for word in EXCLUDED]
 
 
@@ -384,26 +421,47 @@ def classify_job(row: dict[str, str]) -> MatchedJob | None:
     title = row["job_title"]
     if not title:
         return None
-    if matching_phrases(title, EXCLUDED_PATTERNS):
-        return None
 
-    primary = matching_phrases(title, PRIMARY_PATTERNS)
-    if primary:
+    qa = matching_phrases(title, QA_PATTERNS)
+    if qa:
         return MatchedJob(
             **row,
-            match_type="PRIMARY",
-            match_score=100,
-            matched_keywords=primary,
+            match_type="QA",
+            match_score=60,
+            matched_keywords=qa,
+            lane="QA",
         )
 
-    secondary = matching_phrases(title, SECONDARY_PATTERNS)
-    ai_matches = matching_phrases(title, AI_CONTEXT_PATTERNS)
-    if secondary and ai_matches:
+    developer = matching_phrases(title, DEVELOPER_PATTERNS)
+    if not matching_phrases(title, EXCLUDED_PATTERNS):
+        primary = matching_phrases(title, PRIMARY_PATTERNS)
+        if primary:
+            return MatchedJob(
+                **row,
+                match_type="PRIMARY",
+                match_score=100,
+                matched_keywords=primary,
+                lane="AI",
+            )
+
+        secondary = matching_phrases(title, SECONDARY_PATTERNS)
+        ai_matches = matching_phrases(title, AI_CONTEXT_PATTERNS)
+        if secondary and ai_matches:
+            return MatchedJob(
+                **row,
+                match_type="SECONDARY",
+                match_score=70,
+                matched_keywords=secondary + ai_matches,
+                lane="AI",
+            )
+
+    if developer:
         return MatchedJob(
             **row,
-            match_type="SECONDARY",
-            match_score=70,
-            matched_keywords=secondary + ai_matches,
+            match_type="DEVELOPER",
+            match_score=50,
+            matched_keywords=developer,
+            lane="DEVELOPER",
         )
     return None
 
@@ -751,26 +809,66 @@ def build_html_email(
 """
 
 
+def email_targets(
+    jobs: list[MatchedJob], trainings: list[FreeTraining]
+) -> list[tuple[str, list[MatchedJob], list[FreeTraining], list[str], str | None]]:
+    """Lanes that have something new. Trainings stay on the AI email only."""
+    ai_jobs = [job for job in jobs if job.lane == "AI"]
+    developer_jobs = [job for job in jobs if job.lane == "DEVELOPER"]
+    qa_jobs = [job for job in jobs if job.lane == "QA"]
+    targets: list[
+        tuple[str, list[MatchedJob], list[FreeTraining], list[str], str | None]
+    ] = []
+    if ai_jobs or trainings:
+        targets.append(("AI", ai_jobs, list(trainings), RECIPIENTS, None))
+    if developer_jobs:
+        targets.append(
+            (
+                "DEVELOPER",
+                developer_jobs,
+                [],
+                DEVELOPER_RECIPIENTS,
+                f"JobScout: {len(developer_jobs)} developer job(s)",
+            )
+        )
+    if qa_jobs:
+        targets.append(
+            (
+                "QA",
+                qa_jobs,
+                [],
+                QA_RECIPIENTS,
+                f"JobScout: {len(qa_jobs)} QA job(s)",
+            )
+        )
+    return targets
+
+
 def send_html_email(
-    html_body: str, job_count: int, training_count: int = 0
+    html_body: str,
+    job_count: int,
+    training_count: int = 0,
+    recipients: list[str] | None = None,
+    subject: str | None = None,
 ) -> None:
+    to_addresses = recipients if recipients is not None else RECIPIENTS
     sender = os.environ["GMAIL_SENDER_EMAIL"].strip()
     app_password = os.environ["GMAIL_APP_PASSWORD"].replace(" ", "")
-    subject = email_subject(job_count, training_count)
+    subject_line = subject or email_subject(job_count, training_count)
 
     message = MIMEMultipart("alternative")
     message["From"] = sender
-    message["To"] = ", ".join(RECIPIENTS)
-    message["Subject"] = subject
+    message["To"] = ", ".join(to_addresses)
+    message["Subject"] = subject_line
     message["Date"] = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
     message.attach(MIMEText(html_body, "html", "utf-8"))
 
     context = ssl.create_default_context()
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=60) as server:
         server.login(sender, app_password)
-        server.sendmail(sender, RECIPIENTS, message.as_string())
+        server.sendmail(sender, to_addresses, message.as_string())
 
-    logger.info("HTML email sent to %s.", ", ".join(RECIPIENTS))
+    logger.info("HTML email sent to %s.", ", ".join(to_addresses))
 
 
 def main() -> int:
@@ -805,7 +903,8 @@ def main() -> int:
         logger.error("Both job and training sources failed.")
         return 1
 
-    if not new_jobs and not new_trainings:
+    targets = email_targets(new_jobs, new_trainings)
+    if not targets:
         logger.info("No new matching jobs or free trainings. Exiting without email.")
         return 0
 
@@ -820,25 +919,36 @@ def main() -> int:
             "; ".join(item.title for item in new_trainings),
         )
 
-    try:
-        send_html_email(
-            build_html_email(new_jobs, new_trainings),
-            len(new_jobs),
-            len(new_trainings),
-        )
-    except Exception:
-        logger.exception(
-            "Failed to send email. Seen-jobs file was not updated with new items."
-        )
+    failed = False
+    sent_ids: list[str] = []
+    for lane, lane_jobs, lane_trainings, recipients, subject in targets:
+        try:
+            send_html_email(
+                build_html_email(lane_jobs, lane_trainings),
+                len(lane_jobs),
+                len(lane_trainings),
+                recipients,
+                subject,
+            )
+        except Exception:
+            failed = True
+            logger.exception(
+                "Failed to send %s email. Those items were not marked seen.",
+                lane,
+            )
+            continue
+        for job in lane_jobs:
+            sent_ids.append(job.identity())
+            sent_ids.append(job.fingerprint())
+        for item in lane_trainings:
+            sent_ids.append(item.identity())
+            sent_ids.append(item.fingerprint())
+
+    if sent_ids:
+        save_seen_jobs(seen + sent_ids)
+    if failed:
         return 1
 
-    save_seen_jobs(
-        seen
-        + [job.identity() for job in new_jobs]
-        + [job.fingerprint() for job in new_jobs]
-        + [item.identity() for item in new_trainings]
-        + [item.fingerprint() for item in new_trainings]
-    )
     logger.info("Daily scout run completed successfully.")
     return 0
 
